@@ -20,7 +20,7 @@ async function lazyLoadSlugify() {
     mod = await import("transliteration");
   }
   // slugify is exported to modules.default while transliteration is exported to modules.slugify
-  slugify = mod.default || mod.slugify;
+  slugify = mod.slugify || mod;
 }
 
 /**
@@ -41,5 +41,6 @@ export function getSlug(slugString) {
   } else {
     slug = "";
   }
+  console.log("server slug", slug, slugify)
   return slug;
 }

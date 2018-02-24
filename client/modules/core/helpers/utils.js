@@ -21,7 +21,7 @@ async function lazyLoadSlugify() {
   }
 
   // slugify is exported to modules.default while transliteration is exported to modules.slugify
-  slugify = mod.default || mod.slugify;
+  slugify = mod.slugify || mod;
 }
 
 
@@ -35,13 +35,14 @@ async function lazyLoadSlugify() {
  * @param  {String} slugString - string to slugify
  * @return {String} slugified string
  */
-export function getSlug(slugString) {
+export async function getSlug(slugString) {
   let slug;
-  Promise.resolve(lazyLoadSlugify());
+  await Promise.resolve(lazyLoadSlugify());
   if (slugString && slugify) {
     slug = slugify(slugString.toLowerCase());
   } else {
     slug = "";
   }
+  console.log("client slug", slug, slugify)
   return slug;
 }
