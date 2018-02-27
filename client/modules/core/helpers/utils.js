@@ -35,14 +35,13 @@ async function lazyLoadSlugify() {
  * @param  {String} slugString - string to slugify
  * @return {String} slugified string
  */
-export async function getSlug(slugString) {
+export function getSlug(slugString) {
   let slug;
-  await Promise.resolve(lazyLoadSlugify());
+  Promise.resolve(lazyLoadSlugify());
   if (slugString && slugify) {
     slug = slugify(slugString.toLowerCase());
   } else {
     slug = "";
   }
-  console.log("client slug", slug, slugify)
   return slug;
 }

@@ -41,6 +41,5 @@ export function getSlug(slugString) {
   } else {
     slug = "";
   }
-  console.log("server slug", slug, slugify)
   return slug;
 }
