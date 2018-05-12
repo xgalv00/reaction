@@ -2,7 +2,7 @@ import React, { Component } from "react";
 import PropTypes from "prop-types";
 import classnames from "classnames";
 import { Components, registerComponent } from "@reactioncommerce/reaction-components";
-import { Validation } from "@reactioncommerce/reaction-collections";
+import { Validation } from "@reactioncommerce/schemas";
 import { ProductVariant } from "/lib/collections/schemas/products";
 
 
@@ -79,15 +79,15 @@ class ChildVariant extends Component {
   }
 
   renderMedia() {
-    if (this.hasMedia) {
-      const media = this.primaryMediaItem;
+    const media = this.primaryMediaItem;
+    if (!media) return null;
 
-      return (
-        <Components.MediaItem source={media.url()} />
-      );
-    }
-
-    return null;
+    return (
+      <Components.MediaItem
+        source={media}
+        onClick={this.handleClick}
+      />
+    );
   }
 
   renderValidationButton = () => {

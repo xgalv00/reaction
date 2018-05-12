@@ -25,7 +25,7 @@ export const methods = {
       throw new Meteor.Error("access-denied", "Access Denied");
     }
 
-    return Discounts.direct.remove({ _id: discountId });
+    return Discounts.remove({ _id: discountId });
   },
 
   /**
@@ -43,7 +43,7 @@ export const methods = {
     check(discountRate, Number);
     check(discounts, Match.Optional(Array));
 
-    return Cart.direct.update(cartId, {
+    return Cart.update(cartId, {
       $set: {
         discounts,
         discount: discountRate
@@ -86,7 +86,7 @@ export const methods = {
    * @return {Object}  returns discount object
    */
   "discounts/calculate"(cart) {
-    check(cart, Object); // Reaction.Schemas.Cart
+    Reaction.Schemas.Cart.validate(cart);
 
     let currentDiscount = 0;
     // what's going on here?

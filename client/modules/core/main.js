@@ -18,6 +18,9 @@ import { Router } from "/client/modules/router";
 // This is placed outside the main object to make it a private variable.
 // access using `Reaction.state`
 const reactionState = new ReactiveDict();
+
+export const userPrefs = new ReactiveVar(undefined, (val, newVal) => JSON.stringify(val) === JSON.stringify(newVal));
+
 const deps = new Map();
 /**
  * Reaction namespace
@@ -375,18 +378,18 @@ export default {
     if (Meteor.user()) {
       // "reaction" package settings should be synced to
       // the Accounts collection.
-      if (packageName in ["reaction"]) {
+      const syncedPackages = ["reaction"];
+      if (syncedPackages.indexOf(packageName) > -1) {
         Accounts.update(Meteor.userId(), {
           $set: {
             [`profile.preferences.${packageName}.${preference}`]: value
           }
         });
       }
-      const packageSettings = store.get(packageName) || {};
-      packageSettings[preference] = value;
-      return store.set(packageName, packageSettings);
     }
-    return false;
+    const packageSettings = store.get(packageName) || {};
+    packageSettings[preference] = value;
+    return store.set(packageName, packageSettings);
   },
 
   updateUserPreferences(packageName, preference, values) {
@@ -462,10 +465,12 @@ export default {
   },
 
   setShopId(id) {
-    if (id && this.shopId !== id) {
-      this.shopId = id;
-      this.setUserPreferences("reaction", "activeShopId", id);
-    }
+    if (!id || this.shopId === id) { return; }
+
+    this.shopId = id;
+    this.setUserPreferences("reaction", "activeShopId", id);
+
+    Meteor.call("shop/resetShopId");
   },
 
   /**
@@ -485,7 +490,11 @@ export default {
   getShopPrefix() {
     const shopName = this.getShopName();
     if (shopName) {
-      return `/${this.getSlug(shopName.toLowerCase())}`;
+      return Router.pathFor("index", {
+        hash: {
+          shopSlug: this.getSlug(shopName.toLowerCase())
+        }
+      });
     }
   },
 
@@ -532,13 +541,9 @@ export default {
   },
 
   allowGuestCheckout() {
-    let allowGuest = false;
     const settings = this.getShopSettings();
     // we can disable in admin, let's check.
-    if (settings.public && settings.public.allowGuestCheckout) {
-      allowGuest = settings.public.allowGuestCheckout;
-    }
-    return allowGuest;
+    return !!(settings.public && settings.public.allowGuestCheckout);
   },
   /**
    * canInviteToGroup - client (similar to server/api canInviteToGroup)

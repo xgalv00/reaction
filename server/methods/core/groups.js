@@ -128,9 +128,9 @@ Meteor.methods({
    * @summary Adds a user to a permission group
    * Updates the user's list of permissions/roles with the defined the list defined for the group
    * (NB: At this time, a user only belongs to only one group per shop)
-   * @param {String} userId - current data of the group to be updated
-   * @param {String} groupId - id of the group
-   * @return {Object} - `object.status` of 200 on success or Error object on failure
+   * @param {String} userId - The account ID to add to the group
+   * @param {String} groupId - ID of the group
+   * @return {Object} - The modified group object
    */
   "group/addUser"(userId, groupId) {
     check(userId, String);
@@ -178,7 +178,10 @@ Meteor.methods({
     try {
       setUserPermissions({ _id: userId }, permissions, shopId);
       Accounts.update({ _id: userId }, { $set: { groups: newGroups } });
-      Hooks.Events.run("afterAccountsUpdate", loggedInUserId, userId);
+      Hooks.Events.run("afterAccountsUpdate", loggedInUserId, {
+        accountId: userId,
+        updatedFields: ["groups"]
+      });
       if (slug === "owner") {
         if (shopId === Reaction.getPrimaryShopId()) {
           changeMarketplaceOwner({ userId, permissions });
@@ -187,7 +190,8 @@ Meteor.methods({
         Meteor.call("group/addUser", Meteor.userId(), currentUserGrpInShop);
       }
 
-      return { status: 200 };
+      // Return the group the account as added to
+      return Groups.findOne({ _id: groupId });
     } catch (error) {
       Logger.error(error);
       throw new Meteor.Error("server-error", "Could not add user");
@@ -201,9 +205,9 @@ Meteor.methods({
    * @summary Removes a user from a group for a shop, and adds them to the default customer group.
    * Updates the user's permission list to reflect.
    * (NB: At this time, a user only belongs to only one group per shop)
-   * @param {String} userId - current data of the group to be updated
-   * @param {String} groupId - name of the group
-   * @return {Object} - `object.status` of 200 on success or Error object on failure
+   * @param {String} userId - The account ID to remove from the group
+   * @param {String} groupId - ID of the group
+   * @return {Object} - The modified group object
    */
   "group/removeUser"(userId, groupId) {
     check(userId, String);
@@ -226,8 +230,11 @@ Meteor.methods({
     try {
       setUserPermissions(user, defaultCustomerGroupForShop.permissions, shopId);
       Accounts.update({ _id: userId, groups: groupId }, { $set: { "groups.$": defaultCustomerGroupForShop._id } }); // replace the old id with new id
-      Hooks.Events.run("afterAccountsUpdate", Meteor.userId(), userId);
-      return { status: 200 };
+      Hooks.Events.run("afterAccountsUpdate", Meteor.userId(), {
+        accountId: userId,
+        updatedFields: ["groups"]
+      });
+      return defaultCustomerGroupForShop;
     } catch (error) {
       Logger.error(error);
       throw new Meteor.Error("server-error", "Could not add user");
@@ -273,5 +280,8 @@ function setUserPermissions(users, permissions, shopId) {
 Hooks.Events.add("afterCreateDefaultAdminUser", (user) => {
   const group = Groups.findOne({ slug: "owner", shopId: Reaction.getShopId() });
   Accounts.update({ _id: user._id }, { $set: { groups: [group._id] } });
-  Hooks.Events.run("afterAccountsUpdate", null, user._id);
+  Hooks.Events.run("afterAccountsUpdate", null, {
+    accountId: user._id,
+    updatedFields: ["groups"]
+  });
 });

@@ -1,7 +1,6 @@
 import _ from "lodash";
 import { Meteor } from "meteor/meteor";
 import { Roles } from "meteor/alanning:roles";
-import { Random } from "meteor/random";
 import { check, Match } from "meteor/check";
 import { HTTP } from "meteor/http";
 import { Job } from "/imports/plugins/core/job-collection/lib";
@@ -11,6 +10,103 @@ import * as Collections from "/lib/collections";
 import * as Schemas from "/lib/collections/schemas";
 
 /**
+ * @name cloneShop
+ * @summary Returns an existing shop object, with some values removed or changed such
+ *   that it is suitable for inserting as a new shop.
+ * @method
+ * @param {Object} shop - the shop to clone
+ * @param {Object} partialShopData - any properties you'd like to override
+ * @return {Object|null} The cloned shop object or null if a shop with that ID can't be found
+ */
+function cloneShop(shop, partialShopData = {}) {
+  // if a name is not provided, generate a unique name
+  if (!partialShopData || !partialShopData.name) {
+    const count = Collections.Shops.find().count() || "";
+    shop.name += count;
+  }
+
+  // merge in the partial shop data and some other current user attributes
+  Object.assign(shop, partialShopData || {});
+
+  const cleanShop = Schemas.Shop.clean(shop);
+
+  // Never create a second primary shop
+  if (!cleanShop.shopType || cleanShop.shopType === "primary") {
+    cleanShop.shopType = "merchant";
+  }
+
+  // Clean up values that get automatically added
+  delete cleanShop._id;
+  delete cleanShop.createdAt;
+  delete cleanShop.updatedAt;
+  delete cleanShop.slug;
+  // TODO audience permissions need to be consolidated into [object] and not [string]
+  // permissions with [string] on layout ie. orders and checkout, cause the insert to fail
+  delete cleanShop.layout;
+  // delete brandAssets object from shop to prevent new shops from carrying over existing shop's
+  // brand image
+  delete cleanShop.brandAssets;
+
+  return cleanShop;
+}
+
+/**
+ * @name updateShopBrandAssets
+ * @method
+ * @param {Object} asset - brand asset {mediaId: "", type, ""}
+ * @param {String} shopId - the shop id coresponding to the shop for which
+ *                 the asset should be applied (defaults to Reaction.getShopId())
+ * @param {String} userId - the user id on whose behalf we are performing this
+ *                 action (defaults to Meteor.userId())
+ * @return {Int} returns update result
+ */
+export function updateShopBrandAssets(asset, shopId = Reaction.getShopId(), userId = Meteor.userId()) {
+  check(asset, {
+    mediaId: String,
+    type: String
+  });
+  check(shopId, String);
+
+  // must have core permissions
+  if (!Reaction.hasPermission("core", userId, shopId)) {
+    throw new Meteor.Error("access-denied", "Access Denied");
+  }
+
+  // Does our shop contain the brandasset we're tring to add
+  const shopWithBrandAsset = Collections.Shops.findOne({
+    "_id": shopId,
+    "brandAssets.type": asset.type
+  });
+
+  // If it does, then we update it with the new asset reference
+  if (shopWithBrandAsset) {
+    return Collections.Shops.update({
+      "_id": shopId,
+      "brandAssets.type": asset.type
+    }, {
+      $set: {
+        "brandAssets.$": {
+          mediaId: asset.mediaId,
+          type: asset.type
+        }
+      }
+    });
+  }
+
+  // Otherwise we insert a new brand asset reference
+  return Collections.Shops.update({
+    _id: shopId
+  }, {
+    $push: {
+      brandAssets: {
+        mediaId: asset.mediaId,
+        type: asset.type
+      }
+    }
+  });
+}
+
+/**
  * @file Meteor methods for Shop
  *
  *
@@ -18,16 +114,37 @@ import * as Schemas from "/lib/collections/schemas";
 */
 Meteor.methods({
   /**
+   * @name shop/resetShopId
+   * @method
+   * @memberof Methods/Shop
+   * @summary a way for the client to notifiy the server that the shop has
+   *          changed. We could has provided #setShopId, however, the server
+   *          has all the information it needs to determine this on its own,
+   *          and allowing the client to set shopId could be a security risk
+   */
+  "shop/resetShopId"() {
+    return Reaction.resetShopId();
+  },
+
+  /**
    * @name shop/createShop
    * @method
    * @memberof Methods/Shop
    * @param {String} shopAdminUserId - optionally create shop for provided userId
-   * @param {Object} shopData - optionally provide shop object to customize
+   * @param {Object} partialShopData - optionally provide a subset of shop data
+   *                 which will be merged with properties from the primary shop
+   *                 in order to create a document which meets the Shops schema
+   *                 requirements.
    * @return {String} return shopId
    */
-  "shop/createShop"(shopAdminUserId, shopData) {
+  "shop/createShop"(shopAdminUserId, partialShopData) {
     check(shopAdminUserId, Match.Optional(String));
-    check(shopData, Match.Optional(Schemas.Shop));
+    // It is not necessary to test whether shopData is valid against the Shops
+    // schema here, as shopData can be a subset of data. Later, shopData is
+    // combined with a copy of the Primary Shop to fill in the gaps. It is at
+    // that point that we validate/`check` that the combined object is valid
+    // against the Shops schema.
+    check(partialShopData, Match.Maybe(Object));
 
     // Get the current marketplace settings
     const marketplace = Reaction.getMarketplaceSettings();
@@ -46,7 +163,7 @@ Meteor.methods({
       throw new Meteor.Error("access-denied", "Access Denied");
     }
 
-    // Users may only create shops for themselves
+    // Non-admin users may only create shops for themselves
     if (!hasPrimaryShopOwnerPermission && shopAdminUserId !== Meteor.userId()) {
       throw new Meteor.Error("access-denied", "Access Denied");
     }
@@ -57,7 +174,6 @@ Meteor.methods({
       throw new Meteor.Error("access-denied", "Access Denied");
     }
 
-    const count = Collections.Shops.find().count() || "";
     const currentUser = Meteor.user();
     const currentAccount = Collections.Accounts.findOne({ _id: currentUser._id });
     if (!currentUser) {
@@ -66,7 +182,6 @@ Meteor.methods({
 
     let shopUser = currentUser;
     let shopAccount = currentAccount;
-
     // TODO: Create a grantable permission for creating shops so we can decouple ownership from shop creation
     // Only marketplace owners can create shops for others
     if (hasPrimaryShopOwnerPermission) {
@@ -74,46 +189,22 @@ Meteor.methods({
       shopAccount = Collections.Accounts.findOne({ _id: shopAdminUserId }) || currentAccount;
     }
 
+    const primaryShopId = Reaction.getPrimaryShopId();
+
     // Disallow creation of multiple shops, even for marketplace owners
-    if (shopAccount.shopId !== Reaction.getPrimaryShopId()) {
+    if (shopAccount.shopId !== primaryShopId) {
       throw new Meteor.Error(
         "operation-not-permitted",
         "This user already has a shop. Each user may only have one shop."
       );
     }
 
-    // we'll accept a shop object, or clone the current shop
-    const seedShop = shopData || Collections.Shops.findOne(Reaction.getPrimaryShopId());
+    const shop = cloneShop(Reaction.getPrimaryShop(), partialShopData);
 
-    // Never create a second primary shop
-    if (seedShop.shopType === "primary") {
-      seedShop.shopType = "merchant";
-    }
+    shop.emails = shopUser.emails;
+    shop.addressBook = shopAccount.addressBook;
 
-    // ensure unique id and shop name
-    seedShop._id = Random.id();
-    seedShop.name += count;
-
-    // We trust the owner's shop clone, check only when shopData is passed as an argument
-    if (shopData) {
-      check(seedShop, Schemas.Shop);
-    }
-
-    const shop = Object.assign({}, seedShop, {
-      emails: shopUser.emails,
-      addressBook: shopAccount.addressBook
-    });
-
-    // Clean up values that get automatically added
-    delete shop.createdAt;
-    delete shop.updatedAt;
-    delete shop.slug;
-    // TODO audience permissions need to be consolidated into [object] and not [string]
-    // permissions with [string] on layout ie. orders and checkout, cause the insert to fail
-    delete shop.layout;
-    // delete brandAssets object from shop to prevent new shops from carrying over existing shop's
-    // brand image
-    delete shop.brandAssets;
+    Collections.Shops.simpleSchema(shop).validate(shop);
 
     let newShopId;
 
@@ -126,27 +217,32 @@ Meteor.methods({
     const newShop = Collections.Shops.findOne({ _id: newShopId });
 
     // we should have created new shop, or errored
-    Logger.info("Created shop: ", shop._id);
+    Logger.info("Created shop: ", newShopId);
 
     // update user
-    Reaction.insertPackagesForShop(shop._id);
-    Reaction.createGroups({ shopId: shop._id });
-    const ownerGroup = Collections.Groups.findOne({ slug: "owner", shopId: shop._id });
-    Roles.addUsersToRoles([currentUser, shopUser._id], ownerGroup.permissions, shop._id);
+    Reaction.insertPackagesForShop(newShopId);
+    Reaction.createGroups({ shopId: newShopId });
+    const ownerGroup = Collections.Groups.findOne({ slug: "owner", shopId: newShopId });
+    Roles.addUsersToRoles([currentUser, shopUser._id], ownerGroup.permissions, newShopId);
+    // Set the active shopId for this user
+    Reaction.setUserPreferences("reaction", "activeShopId", newShopId, shopUser._id);
     Collections.Accounts.update({ _id: shopUser._id }, {
       $set: {
-        shopId: shop._id
+        shopId: newShopId
       },
       $addToSet: {
         groups: ownerGroup._id
       }
     });
-    Hooks.Events.run("afterAccountsUpdate", currentUser._id, shopUser._id);
+    Hooks.Events.run("afterAccountsUpdate", currentUser._id, {
+      accountId: shopUser._id,
+      updatedFields: ["groups"]
+    });
     // Add this shop to the merchant
-    Collections.Shops.update({ _id: Reaction.getPrimaryShopId() }, {
+    Collections.Shops.update({ _id: primaryShopId }, {
       $addToSet: {
         merchantShops: {
-          _id: newShop._id,
+          _id: newShopId,
           slug: newShop.slug,
           name: newShop.name
         }
@@ -154,7 +250,7 @@ Meteor.methods({
     });
 
     // Set active shop to new shop.
-    return { shopId: shop._id };
+    return { shopId: newShopId };
   },
 
   /**
@@ -445,16 +541,19 @@ Meteor.methods({
    * @description On submit OpenExchangeRatesForm handler
    * @summary we need to rerun fetch exchange rates job on every form submit,
    * that's why we update autoform type to "method-update"
-   * @param {Object} modifier - the modifier object generated from the form values
-   * @param {String} _id - the _id of the document being updated
+   * @param {Object} details An object with _id and modifier props
    * @fires Collections.Packages#update
-   * @todo This method fires Packages collection, so maybe someday it could be
+   * @todo This method fires Packages collection, so maybe someday it could be moved to another file
    * @returns {undefined}
-   * moved to another file
    */
-  "shop/updateShopExternalServices"(modifier, _id) {
-    check(modifier, Match.Optional(Schemas.CorePackageConfig));
-    check(_id, String);
+  "shop/updateShopExternalServices"(details) {
+    check(details, {
+      _id: String,
+      modifier: Object // actual schema validation happens below
+    });
+
+    const { _id, modifier } = details;
+    Schemas.CorePackageConfig.validate(modifier, { modifier: true });
 
     // must have core permissions
     if (!Reaction.hasPermission("core")) {
@@ -658,15 +757,11 @@ Meteor.methods({
     });
     // check to see if tag is in use.
     const productCount = Collections.Products.find({
-      hashtags: {
-        $in: [tagId]
-      }
+      hashtags: tagId
     }).count();
     // check to see if in use as a related tag
     const relatedTagsCount = Collections.Tags.find({
-      relatedTagIds: {
-        $in: [tagId]
-      }
+      relatedTagIds: tagId
     }).count();
     // not in use anywhere, delete it
     if (productCount === 0 && relatedTagsCount === 0) {
@@ -860,44 +955,10 @@ Meteor.methods({
       mediaId: String,
       type: String
     });
-    // must have core permissions
-    if (!Reaction.hasPermission("core")) {
-      throw new Meteor.Error("access-denied", "Access Denied");
-    }
+
     this.unblock();
 
-    // Does our shop contain the brandasset we're tring to add
-    const shopWithBrandAsset = Collections.Shops.findOne({
-      "_id": Reaction.getShopId(),
-      "brandAssets.type": asset.type
-    });
-
-    // If it does, then we update it with the new asset reference
-    if (shopWithBrandAsset) {
-      return Collections.Shops.update({
-        "_id": Reaction.getShopId(),
-        "brandAssets.type": "navbarBrandImage"
-      }, {
-        $set: {
-          "brandAssets.$": {
-            mediaId: asset.mediaId,
-            type: asset.type
-          }
-        }
-      });
-    }
-
-    // Otherwise we insert a new brand asset reference
-    return Collections.Shops.update({
-      _id: Reaction.getShopId()
-    }, {
-      $push: {
-        brandAssets: {
-          mediaId: asset.mediaId,
-          type: asset.type
-        }
-      }
-    });
+    return updateShopBrandAssets(asset);
   },
 
   /**
