@@ -6,3 +6,9 @@ Template.hydraOauthLoginForm.helpers({
     return { component: Components.Login };
   }
 });
+
+Template.hydraNotFoundPage.helpers({
+  component() {
+    return { component: Components.HydraNotFoundPage };
+  }
+});
