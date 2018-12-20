@@ -112,10 +112,17 @@ Meteor.publish("Packages", function (shopId) {
       ], Roles.GLOBAL_GROUP))) {
         options = {};
       }
+
+      const query = { shopId: myShopId };
+
+      if (process.env.IDENTITY_PROVIDER_MODE) {
+        query.name = "reaction-hydra-oauth";
+      } else {
+        query.name = { $ne: "reaction-hydra-oauth" };
+      }
+
       // observe and transform Package registry adds i18n and other meta data
-      const observer = Packages.find({
-        shopId: myShopId
-      }, options).observe({
+      const observer = Packages.find(query, options).observe({
         added(doc) {
           self.added("Packages", doc._id, transform(doc, self.userId));
         },
